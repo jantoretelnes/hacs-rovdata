@@ -3,11 +3,13 @@ from __future__ import annotations
 from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import RovdataCoordinator
+from .sensor import _device_info
 
 
 async def async_setup_entry(
@@ -35,10 +37,10 @@ async def async_setup_entry(
 
 
 class RovdataWolfTracker(CoordinatorEntity[RovdataCoordinator], TrackerEntity):
-    """Represents a wolf observation or masked area as a map tracker."""
-
     _attr_icon = "mdi:paw"
     _attr_source_type = SourceType.GPS
+    _attr_has_entity_name = True
+    _attr_name = "Posisjon"
 
     def __init__(self, coordinator: RovdataCoordinator, data_key: str) -> None:
         super().__init__(coordinator)
@@ -50,18 +52,8 @@ class RovdataWolfTracker(CoordinatorEntity[RovdataCoordinator], TrackerEntity):
         return (self.coordinator.data or {}).get(self._data_key, {})
 
     @property
-    def name(self) -> str:
-        obs = self._obs
-        src = obs.get("source")
-        if src == "arcgis":
-            mask_id = obs.get("masking_id", str(obs.get("objectid", "")))
-            return f"Ulv område {mask_id}"
-        if src == "rovbase":
-            individ_id = obs.get("individ_id", self._data_key)
-            individ_name = obs.get("individ_name", "")
-            return f"Ulv {individ_id}" + (f" {individ_name}" if individ_name else "")
-        individ_id = obs.get("gbif_id") or obs.get("occurrence_id", self._data_key)[:8]
-        return f"Ulv {individ_id}"
+    def device_info(self) -> DeviceInfo:
+        return _device_info(self._data_key, self._obs)
 
     @property
     def latitude(self) -> float | None:
@@ -79,40 +71,20 @@ class RovdataWolfTracker(CoordinatorEntity[RovdataCoordinator], TrackerEntity):
             return {
                 "kilde": "ArcGIS / Miljødirektoratet",
                 "maskeringsrute_id": obs.get("masking_id"),
-                "art": obs.get("art"),
-                "vitenskapelig_navn": obs.get("scientific_name"),
-                "datasett": obs.get("dataset_name"),
-                "institusjon": obs.get("institution"),
                 "sone": obs.get("zone_name"),
             }
         if src == "rovbase":
-            attrs = {
+            return {
                 "kilde": "Rovbase",
-                "individ_id": obs.get("individ_id"),
-                "individ_navn": obs.get("individ_name"),
-                "kjønn": obs.get("kjonn") or None,
-                "født_revir": obs.get("fodt_revir") or None,
-                "opprinnelse_id": obs.get("opprinnelse_id") or None,
                 "dato": obs.get("event_date"),
-                "lokalitet": obs.get("locality"),
                 "kommune": obs.get("municipality"),
-                "datatype": obs.get("datatype"),
-                "dna_id": obs.get("dna_id") or None,
+                "lokalitet": obs.get("locality"),
                 "sone": obs.get("zone_name"),
             }
-            attrs.update(obs.get("_dt_attrs") or {})
-            return {k: v for k, v in attrs.items() if v is not None and v != ""}
         return {
             "kilde": "GBIF / Skandobs",
-            "occurrence_id": obs.get("occurrence_id"),
-            "gbif_id": obs.get("gbif_id"),
             "dato": obs.get("event_date"),
             "lokalitet": obs.get("locality"),
-            "fylke": obs.get("state_province"),
-            "antall_individer": obs.get("individual_count"),
-            "registrert_av": obs.get("recorded_by"),
-            "datasett": obs.get("dataset_name"),
-            "merknader": obs.get("remarks"),
             "sone": obs.get("zone_name"),
         }
 

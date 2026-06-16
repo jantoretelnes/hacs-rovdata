@@ -1,15 +1,122 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
+from typing import Any, Callable
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import RovdataCoordinator
+
+
+@dataclass(frozen=True)
+class RovdataSensorDef:
+    key: str
+    name: str
+    device_class: str | None
+    value_fn: Callable[[dict], Any]
+    sources: tuple[str, ...]  # which sources this sensor applies to
+    unit: str | None = None
+
+
+_ROVBASE_SENSORS: list[RovdataSensorDef] = [
+    RovdataSensorDef("dato", "Dato", SensorDeviceClass.DATE,
+                     lambda o: _parse_date(o.get("event_date")),
+                     ("rovbase",)),
+    RovdataSensorDef("kjonn", "Kjønn", None,
+                     lambda o: o.get("kjonn") or None,
+                     ("rovbase",)),
+    RovdataSensorDef("fodt_revir", "Født revir", None,
+                     lambda o: o.get("fodt_revir") or None,
+                     ("rovbase",)),
+    RovdataSensorDef("datatype", "Observasjonstype", None,
+                     lambda o: _dt_label(o.get("datatype")),
+                     ("rovbase",)),
+    RovdataSensorDef("kontrollstatus", "Kontrollstatus", None,
+                     lambda o: (o.get("_dt_attrs") or {}).get("kontrollstatus") or None,
+                     ("rovbase",)),
+    RovdataSensorDef("vurdering", "Vurdering", None,
+                     lambda o: (o.get("_dt_attrs") or {}).get("vurdering") or None,
+                     ("rovbase",)),
+]
+
+_GBIF_SENSORS: list[RovdataSensorDef] = [
+    RovdataSensorDef("dato", "Dato", SensorDeviceClass.DATE,
+                     lambda o: _parse_date(o.get("event_date")),
+                     ("gbif",)),
+    RovdataSensorDef("lokalitet", "Lokalitet", None,
+                     lambda o: o.get("locality") or None,
+                     ("gbif",)),
+    RovdataSensorDef("antall", "Antall individer", None,
+                     lambda o: o.get("individual_count"),
+                     ("gbif",)),
+]
+
+_ARCGIS_SENSORS: list[RovdataSensorDef] = [
+    RovdataSensorDef("masking_id", "Maskeringsrute", None,
+                     lambda o: o.get("masking_id") or None,
+                     ("arcgis",)),
+    RovdataSensorDef("art", "Art", None,
+                     lambda o: o.get("art") or None,
+                     ("arcgis",)),
+]
+
+_ALL_SENSORS = _ROVBASE_SENSORS + _GBIF_SENSORS + _ARCGIS_SENSORS
+
+_DATATYPE_LABEL = {
+    "dna": "DNA-prøve",
+    "DodeRovdyr": "Dødt rovdyr",
+    "Rovviltobservasjon": "Rovviltobservasjon",
+    "Rovviltskade": "Rovviltskade",
+}
+
+
+def _parse_date(date_str: str | None) -> date | None:
+    if not date_str:
+        return None
+    try:
+        return date.fromisoformat(date_str[:10])
+    except ValueError:
+        return None
+
+
+def _dt_label(datatype: str | None) -> str | None:
+    return _DATATYPE_LABEL.get(datatype or "", datatype) or None
+
+
+def _device_info(data_key: str, obs: dict) -> DeviceInfo:
+    src = obs.get("source", "")
+    if src == "rovbase":
+        individ_id = obs["individ_id"]
+        individ_name = obs.get("individ_name", "")
+        name = f"Ulv {individ_id}" + (f" {individ_name}" if individ_name else "")
+        return DeviceInfo(
+            identifiers={(DOMAIN, individ_id)},
+            name=name,
+            manufacturer="Rovbase",
+            model=_DATATYPE_LABEL.get(obs.get("datatype", ""), obs.get("datatype", "")),
+        )
+    if src == "gbif":
+        gbif_id = obs.get("gbif_id", data_key)
+        return DeviceInfo(
+            identifiers={(DOMAIN, data_key)},
+            name=f"Ulv {gbif_id}",
+            manufacturer="GBIF / Skandobs",
+            model=obs.get("dataset_name", ""),
+        )
+    # arcgis
+    return DeviceInfo(
+        identifiers={(DOMAIN, data_key)},
+        name=f"Ulv område {obs.get('masking_id', data_key)}",
+        manufacturer="Miljødirektoratet",
+        model="ArcGIS",
+    )
 
 
 async def async_setup_entry(
@@ -22,13 +129,20 @@ async def async_setup_entry(
 
     @callback
     def _add_new_entities() -> None:
-        new = [
-            RovdataWolfSensor(coordinator, key)
-            for key in coordinator.data or {}
-            if key not in known
-        ]
+        new: list[RovdataWolfSensor] = []
+        for data_key, obs in (coordinator.data or {}).items():
+            src = obs.get("source", "")
+            defs = (
+                _ROVBASE_SENSORS if src == "rovbase"
+                else _GBIF_SENSORS if src == "gbif"
+                else _ARCGIS_SENSORS
+            )
+            for sdef in defs:
+                uid = f"rovdata_sensor_{data_key}_{sdef.key}"
+                if uid not in known:
+                    known.add(uid)
+                    new.append(RovdataWolfSensor(coordinator, data_key, sdef))
         if new:
-            known.update(e.unique_id for e in new)
             async_add_entities(new)
 
     coordinator.async_add_listener(_add_new_entities)
@@ -36,102 +150,33 @@ async def async_setup_entry(
 
 
 class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
-    """Sensor with details for a single wolf observation or masked area."""
-
     _attr_icon = "mdi:paw"
+    _attr_has_entity_name = True
 
-    def __init__(self, coordinator: RovdataCoordinator, data_key: str) -> None:
+    def __init__(
+        self,
+        coordinator: RovdataCoordinator,
+        data_key: str,
+        sdef: RovdataSensorDef,
+    ) -> None:
         super().__init__(coordinator)
         self._data_key = data_key
-        self._attr_unique_id = f"rovdata_sensor_{data_key}"
+        self._sdef = sdef
+        self._attr_unique_id = f"rovdata_sensor_{data_key}_{sdef.key}"
+        self._attr_name = sdef.name
+        self._attr_device_class = sdef.device_class
 
     @property
     def _obs(self) -> dict:
         return (self.coordinator.data or {}).get(self._data_key, {})
 
     @property
-    def name(self) -> str:
-        obs = self._obs
-        src = obs.get("source")
-        if src == "arcgis":
-            mask_id = obs.get("masking_id", str(obs.get("objectid", "")))
-            return f"Ulv område {mask_id}"
-        if src == "rovbase":
-            individ_id = obs.get("individ_id", self._data_key)
-            individ_name = obs.get("individ_name", "")
-            return f"Ulv {individ_id}" + (f" {individ_name}" if individ_name else "")
-        individ_id = obs.get("gbif_id") or obs.get("occurrence_id", self._data_key)[:8]
-        return f"Ulv {individ_id}"
-
-    @property
-    def device_class(self):
-        if self._obs.get("source") in ("gbif", "rovbase"):
-            return SensorDeviceClass.DATE
-        return None
+    def device_info(self) -> DeviceInfo:
+        return _device_info(self._data_key, self._obs)
 
     @property
     def native_value(self):
-        obs = self._obs
-        if obs.get("source") == "arcgis":
-            return obs.get("masking_id") or str(obs.get("objectid", ""))
-        date_str = (obs.get("event_date") or "")[:10]
-        if not date_str:
-            return None
-        try:
-            return date.fromisoformat(date_str)
-        except ValueError:
-            return None
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        obs = self._obs
-        src = obs.get("source")
-        if src == "arcgis":
-            return {
-                "kilde": "ArcGIS / Miljødirektoratet",
-                "maskeringsrute_id": obs.get("masking_id"),
-                "breddegrad": obs.get("latitude"),
-                "lengdegrad": obs.get("longitude"),
-                "art": obs.get("art"),
-                "vitenskapelig_navn": obs.get("scientific_name"),
-                "datasett": obs.get("dataset_name"),
-                "institusjon": obs.get("institution"),
-                "sone": obs.get("zone_name"),
-            }
-        if src == "rovbase":
-            attrs = {
-                "kilde": "Rovbase",
-                "individ_id": obs.get("individ_id"),
-                "individ_navn": obs.get("individ_name"),
-                "kjønn": obs.get("kjonn") or None,
-                "født_revir": obs.get("fodt_revir") or None,
-                "opprinnelse_id": obs.get("opprinnelse_id") or None,
-                "breddegrad": obs.get("latitude"),
-                "lengdegrad": obs.get("longitude"),
-                "lokalitet": obs.get("locality"),
-                "kommune": obs.get("municipality"),
-                "datatype": obs.get("datatype"),
-                "dna_id": obs.get("dna_id") or None,
-                "sone": obs.get("zone_name"),
-            }
-            attrs.update(obs.get("_dt_attrs") or {})
-            return {k: v for k, v in attrs.items() if v is not None and v != ""}
-        attrs = {
-            "kilde": "GBIF / Skandobs",
-            "occurrence_id": obs.get("occurrence_id"),
-            "gbif_id": obs.get("gbif_id"),
-            "dato": (obs.get("event_date") or "")[:10] or None,
-            "breddegrad": obs.get("latitude"),
-            "lengdegrad": obs.get("longitude"),
-            "lokalitet": obs.get("locality") or None,
-            "fylke": obs.get("state_province") or None,
-            "antall_individer": obs.get("individual_count"),
-            "registrert_av": obs.get("recorded_by") or None,
-            "datasett": obs.get("dataset_name") or None,
-            "merknader": obs.get("remarks") or None,
-            "sone": obs.get("zone_name"),
-        }
-        return {k: v for k, v in attrs.items() if v is not None}
+        return self._sdef.value_fn(self._obs)
 
     @property
     def available(self) -> bool:
