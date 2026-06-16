@@ -52,15 +52,20 @@ class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
     @property
     def name(self) -> str:
         obs = self._obs
-        if obs.get("source") == "arcgis":
+        src = obs.get("source")
+        if src == "arcgis":
             mask_id = obs.get("masking_id", str(obs.get("objectid", "")))
             return f"Ulv område {mask_id}"
+        if src == "rovbase":
+            individ_id = obs.get("individ_id", self._data_key)
+            individ_name = obs.get("individ_name", "")
+            return f"Ulv {individ_id}" + (f" {individ_name}" if individ_name else "")
         individ_id = obs.get("gbif_id") or obs.get("occurrence_id", self._data_key)[:8]
         return f"Ulv {individ_id}"
 
     @property
     def device_class(self):
-        if self._obs.get("source") == "gbif":
+        if self._obs.get("source") in ("gbif", "rovbase"):
             return SensorDeviceClass.DATE
         return None
 
@@ -80,7 +85,8 @@ class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         obs = self._obs
-        if obs.get("source") == "arcgis":
+        src = obs.get("source")
+        if src == "arcgis":
             return {
                 "kilde": "ArcGIS / Miljødirektoratet",
                 "maskeringsrute_id": obs.get("masking_id"),
@@ -90,6 +96,19 @@ class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
                 "vitenskapelig_navn": obs.get("scientific_name"),
                 "datasett": obs.get("dataset_name"),
                 "institusjon": obs.get("institution"),
+                "sone": obs.get("zone_name"),
+            }
+        if src == "rovbase":
+            return {
+                "kilde": "Rovbase",
+                "individ_id": obs.get("individ_id"),
+                "individ_navn": obs.get("individ_name"),
+                "breddegrad": obs.get("latitude"),
+                "lengdegrad": obs.get("longitude"),
+                "lokalitet": obs.get("locality"),
+                "kommune": obs.get("municipality"),
+                "datatype": obs.get("datatype"),
+                "dna_id": obs.get("dna_id"),
                 "sone": obs.get("zone_name"),
             }
         return {

@@ -14,6 +14,8 @@ ARCGIS_WOLF_URL = (
     "/sensitive_artsdata/sensitive_artsdata_maskering/MapServer/29/query"
 )
 
+ROVBASE_FEATURE_URL = "https://www.rovbase.no/api/Feature"
+
 SCAN_INTERVAL_HOURS = 24
 
 ZONE_PREFIX = "rovdata_"
