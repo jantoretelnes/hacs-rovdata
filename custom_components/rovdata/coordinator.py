@@ -164,6 +164,66 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
 
     # ── Rovbase ───────────────────────────────────────────────────────────────
 
+    _KJONN = {"1": "hann", "2": "hunn", "3": "ukjent"}
+
+    async def _fetch_individ_data(
+        self,
+        session: aiohttp.ClientSession,
+        individ_ids: set[str],
+    ) -> dict[str, dict]:
+        """Fetch extra individual metadata (sex, birth territory) from Rovbase."""
+        result: dict[str, dict] = {}
+        for iid in individ_ids:
+            url = f"https://www.rovbase.no/api/individualData/{iid}"
+            try:
+                async with session.get(
+                    url,
+                    headers={"Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        result[iid] = data
+            except Exception as err:
+                _LOGGER.debug("individualData fetch failed for %s: %s", iid, err)
+        return result
+
+    @staticmethod
+    def _datatype_attrs(rec: dict) -> dict:
+        """Extract datatype-specific attributes from a Feature record."""
+        dt = rec.get("datatype", "")
+        if dt == "dna":
+            return {
+                "strekkode": rec.get("strekkode", ""),
+                "prøvetype_id": rec.get("prøvetypeID", "") or rec.get("prøvetypeID", ""),
+                "prøvestatus_id": rec.get("prøvestatusID", "") or rec.get("prøvestatusID", ""),
+                "arts_id_analyse": rec.get("artsIDAnalyse", ""),
+            }
+        if dt == "DodeRovdyr":
+            return {
+                "alder": rec.get("alder", ""),
+                "helvekt_kg": rec.get("helvekt", ""),
+                "slaktevekt_kg": rec.get("slaktevekt", ""),
+                "yngling": rec.get("yngling"),
+                "bakgrunn_årsak_id": rec.get("bakgrunnArsakID", ""),
+                "utfall_id": rec.get("utfallID", ""),
+            }
+        if dt == "Rovviltobservasjon":
+            return {
+                "observasjonstyper": rec.get("observasjoner", []),
+                "totalt_antall": rec.get("totaltAntall"),
+                "kontrollstatus_id": rec.get("kontrollstatusID", ""),
+                "vurdering_id": rec.get("vurderingID", ""),
+            }
+        if dt == "Rovviltskade":
+            return {
+                "tilstand_id": rec.get("tilstandID", ""),
+                "skadetype_id": rec.get("skadetypeID", ""),
+                "skadeårsak_id": rec.get("skadeårsakID", "") or rec.get("skadeårsakID", ""),
+                "vurdering_id": rec.get("vurderingID", ""),
+            }
+        return {}
+
     async def _fetch_rovbase(
         self,
         session: aiohttp.ClientSession,
@@ -211,8 +271,7 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
             _LOGGER.error("Rovbase fetch error: %s", err)
             return {}
 
-        # Build result keyed by individID (most recent observation per individual per zone)
-        # individID may be empty for anonymous samples — fall back to dnaID
+        # First pass: collect in-zone records, keyed by individID (newest per individual)
         best: dict[str, dict] = {}
 
         for rec in records:
@@ -222,7 +281,6 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
                 continue
             lat, lon = coords
 
-            # Find which zone(s) this point belongs to
             matching_zones = [z for z in zones if _point_in_zone(lat, lon, z)]
             if not matching_zones:
                 continue
@@ -238,11 +296,11 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
 
             dato = rec.get("dato", "")
             date_str = dato[:10] if dato else ""
+            kjonn_id = str(rec.get("kjønnID") or rec.get("kjønnID") or "").strip()
 
             for zone in matching_zones:
                 key = f"rovbase_{individ_id}"
                 existing = best.get(key)
-                # Keep newest observation
                 if existing and existing.get("event_date", "") >= date_str:
                     continue
                 best[key] = {
@@ -256,9 +314,28 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
                     "locality": rec.get("funnsted", ""),
                     "municipality": rec.get("kommune", ""),
                     "dna_id": rec.get("dnaID", ""),
+                    "kjonn": self._KJONN.get(kjonn_id, ""),
                     "zone_name": zone["name"],
                     "zone_entity_id": zone["entity_id"],
+                    "_dt_attrs": self._datatype_attrs(rec),
                 }
+
+        # Second pass: enrich with individual metadata (sex, birth territory)
+        named_ids = {
+            v["individ_id"]
+            for v in best.values()
+            if v["individ_id"].startswith("U")  # UI* = registered individuals
+        }
+        if named_ids:
+            individ_data = await self._fetch_individ_data(session, named_ids)
+            for key, entry in best.items():
+                iid = entry["individ_id"]
+                meta = individ_data.get(iid, {})
+                if meta:
+                    kjonn_id = str(meta.get("kjonnID") or "").strip()
+                    entry["kjonn"] = entry["kjonn"] or self._KJONN.get(kjonn_id, "")
+                    entry["fodt_revir"] = meta.get("fodtRevir", "")
+                    entry["opprinnelse_id"] = meta.get("opprinnelseID", "")
 
         return best
 

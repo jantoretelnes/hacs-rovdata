@@ -99,18 +99,23 @@ class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
                 "sone": obs.get("zone_name"),
             }
         if src == "rovbase":
-            return {
+            attrs = {
                 "kilde": "Rovbase",
                 "individ_id": obs.get("individ_id"),
                 "individ_navn": obs.get("individ_name"),
+                "kjønn": obs.get("kjonn") or None,
+                "født_revir": obs.get("fodt_revir") or None,
+                "opprinnelse_id": obs.get("opprinnelse_id") or None,
                 "breddegrad": obs.get("latitude"),
                 "lengdegrad": obs.get("longitude"),
                 "lokalitet": obs.get("locality"),
                 "kommune": obs.get("municipality"),
                 "datatype": obs.get("datatype"),
-                "dna_id": obs.get("dna_id"),
+                "dna_id": obs.get("dna_id") or None,
                 "sone": obs.get("zone_name"),
             }
+            attrs.update(obs.get("_dt_attrs") or {})
+            return {k: v for k, v in attrs.items() if v is not None and v != ""}
         return {
             "kilde": "GBIF / Skandobs",
             "occurrence_id": obs.get("occurrence_id"),
