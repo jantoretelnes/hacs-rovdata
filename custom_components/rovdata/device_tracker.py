@@ -53,13 +53,10 @@ class RovdataWolfTracker(CoordinatorEntity[RovdataCoordinator], TrackerEntity):
     def name(self) -> str:
         obs = self._obs
         if obs.get("source") == "arcgis":
-            zone = obs.get("zone_name", "")
             mask_id = obs.get("masking_id", str(obs.get("objectid", "")))
-            return f"Ulv område – {mask_id or zone}"
-        locality = obs.get("locality") or obs.get("state_province") or ""
-        date = (obs.get("event_date") or "")[:10]
-        label = locality or date or self._data_key[:8]
-        return f"Ulv – {label}"
+            return f"Ulv område {mask_id}"
+        individ_id = obs.get("gbif_id") or obs.get("occurrence_id", self._data_key)[:8]
+        return f"Ulv {individ_id}"
 
     @property
     def latitude(self) -> float | None:
