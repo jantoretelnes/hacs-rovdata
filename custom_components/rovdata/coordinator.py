@@ -30,6 +30,40 @@ _LOGGER = logging.getLogger(__name__)
 
 _WKT_POINT = re.compile(r"POINT\s*\(\s*([\d.]+)\s+([\d.]+)\s*\)")
 
+# Rovbase lookup tables (from Rovbase JS bundle)
+_VURDERING = {
+    "1": "Dokumentert",
+    "2": "Antatt sikker",
+    "3": "Usikker",
+    "4": "Feilmelding",
+}
+_KONTROLLSTATUS = {
+    "1": "Rovviltkontakt",
+    "2": "Statens naturoppsyn (SNO)",
+    "3": "Foto",
+    "4": "Ikke kontrollert",
+    "5": "Intervju",
+    "6": "Laboratorium",
+    "7": "LST",
+    "8": "Samisk siida",
+    "9": "GPS",
+}
+_OBSERVASJONSTYPE = {
+    "1": "Dødt rovdyr",
+    "2": "Synsobservasjon",
+    "3": "Spor",
+    "4": "Ekskrement",
+    "5": "Revirhevding",
+    "6": "Yngling",
+    "7": "Kloringsspor",
+    "8": "Hår/fjær",
+    "9": "Leie",
+    "10": "Graving",
+    "11": "Analysert DNA",
+    "12": "Uanalysert DNA",
+    "13": "Uspesifisert",
+}
+
 
 def _bounding_box(lat: float, lon: float, radius_m: float) -> tuple[float, float, float, float]:
     delta_lat = radius_m / 111_000
@@ -192,35 +226,39 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
     def _datatype_attrs(rec: dict) -> dict:
         """Extract datatype-specific attributes from a Feature record."""
         dt = rec.get("datatype", "")
+        vurdering_id = str(rec.get("vurderingID") or "").strip()
+        vurdering = _VURDERING.get(vurdering_id, "")
+
         if dt == "dna":
             return {
                 "strekkode": rec.get("strekkode", ""),
-                "prøvetype_id": rec.get("prøvetypeID", "") or rec.get("prøvetypeID", ""),
-                "prøvestatus_id": rec.get("prøvestatusID", "") or rec.get("prøvestatusID", ""),
-                "arts_id_analyse": rec.get("artsIDAnalyse", ""),
+                "vurdering": vurdering,
             }
         if dt == "DodeRovdyr":
+            kontroll_id = str(rec.get("kontrollstatusID") or "").strip()
             return {
                 "alder": rec.get("alder", ""),
                 "helvekt_kg": rec.get("helvekt", ""),
                 "slaktevekt_kg": rec.get("slaktevekt", ""),
                 "yngling": rec.get("yngling"),
-                "bakgrunn_årsak_id": rec.get("bakgrunnArsakID", ""),
-                "utfall_id": rec.get("utfallID", ""),
+                "kontrollstatus": _KONTROLLSTATUS.get(kontroll_id, ""),
+                "vurdering": vurdering,
             }
         if dt == "Rovviltobservasjon":
+            kontroll_id = str(rec.get("kontrollstatusID") or "").strip()
+            obs_ids = [str(o) for o in (rec.get("observasjoner") or [])]
+            obs_typer = [_OBSERVASJONSTYPE.get(o, o) for o in obs_ids]
             return {
-                "observasjonstyper": rec.get("observasjoner", []),
+                "observasjonstyper": obs_typer if obs_typer else None,
                 "totalt_antall": rec.get("totaltAntall"),
-                "kontrollstatus_id": rec.get("kontrollstatusID", ""),
-                "vurdering_id": rec.get("vurderingID", ""),
+                "kontrollstatus": _KONTROLLSTATUS.get(kontroll_id, ""),
+                "vurdering": vurdering,
             }
         if dt == "Rovviltskade":
+            kontroll_id = str(rec.get("kontrollstatusID") or "").strip()
             return {
-                "tilstand_id": rec.get("tilstandID", ""),
-                "skadetype_id": rec.get("skadetypeID", ""),
-                "skadeårsak_id": rec.get("skadeårsakID", "") or rec.get("skadeårsakID", ""),
-                "vurdering_id": rec.get("vurderingID", ""),
+                "kontrollstatus": _KONTROLLSTATUS.get(kontroll_id, ""),
+                "vurdering": vurdering,
             }
         return {}
 
@@ -377,14 +415,19 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
 
             for rec in data.get("results", []):
                 oid = str(rec.get("occurrenceID") or rec.get("gbifID") or "")
-                if not oid:
+                lat = rec.get("decimalLatitude")
+                lon = rec.get("decimalLongitude")
+                if not oid or lat is None or lon is None:
+                    continue
+                # Exact circle filter (GBIF bbox is slightly wider than the zone)
+                if not _point_in_zone(lat, lon, zone):
                     continue
                 results[f"gbif_{oid}"] = {
                     "source": "gbif",
                     "occurrence_id": oid,
                     "gbif_id": str(rec.get("gbifID", "")),
-                    "latitude": rec.get("decimalLatitude"),
-                    "longitude": rec.get("decimalLongitude"),
+                    "latitude": lat,
+                    "longitude": lon,
                     "event_date": rec.get("eventDate", ""),
                     "locality": rec.get("locality", ""),
                     "state_province": rec.get("stateProvince", ""),

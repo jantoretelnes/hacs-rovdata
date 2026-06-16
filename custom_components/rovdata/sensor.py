@@ -116,20 +116,22 @@ class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
             }
             attrs.update(obs.get("_dt_attrs") or {})
             return {k: v for k, v in attrs.items() if v is not None and v != ""}
-        return {
+        attrs = {
             "kilde": "GBIF / Skandobs",
             "occurrence_id": obs.get("occurrence_id"),
             "gbif_id": obs.get("gbif_id"),
+            "dato": (obs.get("event_date") or "")[:10] or None,
             "breddegrad": obs.get("latitude"),
             "lengdegrad": obs.get("longitude"),
-            "lokalitet": obs.get("locality"),
-            "fylke": obs.get("state_province"),
+            "lokalitet": obs.get("locality") or None,
+            "fylke": obs.get("state_province") or None,
             "antall_individer": obs.get("individual_count"),
-            "registrert_av": obs.get("recorded_by"),
-            "datasett": obs.get("dataset_name"),
-            "merknader": obs.get("remarks"),
+            "registrert_av": obs.get("recorded_by") or None,
+            "datasett": obs.get("dataset_name") or None,
+            "merknader": obs.get("remarks") or None,
             "sone": obs.get("zone_name"),
         }
+        return {k: v for k, v in attrs.items() if v is not None}
 
     @property
     def available(self) -> bool:
