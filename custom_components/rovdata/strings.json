@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rovdata Ulv",
+        "description": "Henter ulveobservasjoner fra GBIF/Skandobs for alle HA-soner som starter med 'rovdata_'. Token fra Miljødirektoratet er valgfritt og gir tilgang til maskerte utbredelsesområder (ArcGIS).",
+        "data": {
+          "max_age_days": "Maks alder på observasjoner (dager)",
+          "arcgis_token": "ArcGIS-token fra Miljødirektoratet (valgfritt)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Kun én instans av Rovdata Ulv er tillatt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rovdata Ulv – innstillinger",
+        "data": {
+          "max_age_days": "Maks alder på observasjoner (dager)",
+          "arcgis_token": "ArcGIS-token fra Miljødirektoratet (valgfritt)"
+        }
+      }
+    }
+  }
+}

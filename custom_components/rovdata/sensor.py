@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from datetime import date
+
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN
+from .coordinator import RovdataCoordinator
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator: RovdataCoordinator = hass.data[DOMAIN][entry.entry_id]
+    known: set[str] = set()
+
+    @callback
+    def _add_new_entities() -> None:
+        new = [
+            RovdataWolfSensor(coordinator, key)
+            for key in coordinator.data or {}
+            if key not in known
+        ]
+        if new:
+            known.update(e.unique_id for e in new)
+            async_add_entities(new)
+
+    coordinator.async_add_listener(_add_new_entities)
+    _add_new_entities()
+
+
+class RovdataWolfSensor(CoordinatorEntity[RovdataCoordinator], SensorEntity):
+    """Sensor with details for a single wolf observation or masked area."""
+
+    _attr_icon = "mdi:paw"
+
+    def __init__(self, coordinator: RovdataCoordinator, data_key: str) -> None:
+        super().__init__(coordinator)
+        self._data_key = data_key
+        self._attr_unique_id = f"rovdata_sensor_{data_key}"
+
+    @property
+    def _obs(self) -> dict:
+        return (self.coordinator.data or {}).get(self._data_key, {})
+
+    @property
+    def name(self) -> str:
+        obs = self._obs
+        if obs.get("source") == "arcgis":
+            mask_id = obs.get("masking_id", str(obs.get("objectid", "")))
+            zone = obs.get("zone_name", "")
+            return f"Ulv område – {mask_id or zone}"
+        locality = obs.get("locality") or obs.get("state_province") or ""
+        date_str = (obs.get("event_date") or "")[:10]
+        label = locality or date_str or self._data_key[:8]
+        return f"Ulv – {label}"
+
+    @property
+    def device_class(self):
+        if self._obs.get("source") == "gbif":
+            return SensorDeviceClass.DATE
+        return None
+
+    @property
+    def native_value(self):
+        obs = self._obs
+        if obs.get("source") == "arcgis":
+            return obs.get("masking_id") or str(obs.get("objectid", ""))
+        date_str = (obs.get("event_date") or "")[:10]
+        if not date_str:
+            return None
+        try:
+            return date.fromisoformat(date_str)
+        except ValueError:
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        obs = self._obs
+        if obs.get("source") == "arcgis":
+            return {
+                "kilde": "ArcGIS / Miljødirektoratet",
+                "maskeringsrute_id": obs.get("masking_id"),
+                "breddegrad": obs.get("latitude"),
+                "lengdegrad": obs.get("longitude"),
+                "art": obs.get("art"),
+                "vitenskapelig_navn": obs.get("scientific_name"),
+                "datasett": obs.get("dataset_name"),
+                "institusjon": obs.get("institution"),
+                "sone": obs.get("zone_name"),
+            }
+        return {
+            "kilde": "GBIF / Skandobs",
+            "occurrence_id": obs.get("occurrence_id"),
+            "gbif_id": obs.get("gbif_id"),
+            "breddegrad": obs.get("latitude"),
+            "lengdegrad": obs.get("longitude"),
+            "lokalitet": obs.get("locality"),
+            "fylke": obs.get("state_province"),
+            "antall_individer": obs.get("individual_count"),
+            "registrert_av": obs.get("recorded_by"),
+            "datasett": obs.get("dataset_name"),
+            "merknader": obs.get("remarks"),
+            "sone": obs.get("zone_name"),
+        }
+
+    @property
+    def available(self) -> bool:
+        return self._data_key in (self.coordinator.data or {})

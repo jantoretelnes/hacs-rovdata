@@ -1,0 +1,13 @@
+{
+  "domain": "rovdata",
+  "name": "Rovdata Ulv",
+  "version": "1.0.0",
+  "documentation": "https://github.com/yourname/hacs-rovdata",
+  "issue_tracker": "https://github.com/yourname/hacs-rovdata/issues",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "config_flow": true,
+  "integration_type": "service"
+}
