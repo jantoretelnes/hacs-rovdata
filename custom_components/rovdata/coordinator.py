@@ -227,7 +227,8 @@ class RovdataCoordinator(DataUpdateCoordinator[dict]):
             if not matching_zones:
                 continue
 
-            individ = rec.get("individ") or {}
+            individ_raw = rec.get("individ") or {}
+            individ = individ_raw[0] if isinstance(individ_raw, list) else individ_raw
             individ_id = (individ.get("individID") or "").strip()
             individ_name = (individ.get("individnavn") or "").strip()
             if not individ_id:
